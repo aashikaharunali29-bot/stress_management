@@ -10,6 +10,7 @@ frontend/node_modules/
 frontend/build/
 
 backend/__pycache__/
+backend/stress.db
 
 .idea/
 .vscode/
