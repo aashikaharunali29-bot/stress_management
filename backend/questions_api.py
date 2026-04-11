@@ -5,15 +5,17 @@ from typing import Any
 
 import requests
 from dotenv import load_dotenv
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
 from models import StressRecord
 from source_question_bank import build_assessment_questions
+from ai_question_generator import generate_dynamic_assessment_questions, generate_offline_assessment_questions
 from task_engine import get_tasks
 
-load_dotenv()
+load_dotenv(Path(__file__).with_name(".env"))
 
 router = APIRouter()
 
@@ -163,7 +165,10 @@ def _generate_questions_via_api(email: str, context: dict[str, Any]) -> dict[str
                 ),
             }
         else:
-            data = build_assessment_questions()
+            try:
+                data = generate_dynamic_assessment_questions(email, context)
+            except Exception:
+                data = generate_offline_assessment_questions(email, context)
 
     personality_questions = _normalize_personality_questions(
         data.get("personality_questions", [])
@@ -178,9 +183,16 @@ def _generate_questions_via_api(email: str, context: dict[str, Any]) -> dict[str
 
 
 def _generate_tasks_via_api(
-    stress_level: str, personality_type: str, email: str, db: Session
+    stress_level: str,
+    personality_type: str,
+    email: str,
+    db: Session,
+    *,
+    avoid_task_titles: list[str] | None = None,
 ) -> dict[str, Any]:
     context = _get_user_context(email, db) if email else {"assessments_taken": 0}
+    if avoid_task_titles:
+        context["avoid_task_titles"] = [str(t) for t in avoid_task_titles if str(t).strip()]
     payload = {
         "email": email,
         "stress_level": stress_level,
@@ -192,7 +204,7 @@ def _generate_tasks_via_api(
         data = _call_json_api(TASKS_API_URL, payload)
         tasks = data.get("tasks", data)
     else:
-        tasks = get_tasks(stress_level, personality_type)
+        tasks = get_tasks(stress_level, personality_type, context=context)
 
     return {"tasks": _normalize_tasks(tasks), "source": "api"}
 
@@ -252,6 +264,7 @@ def get_ai_tasks(payload: dict[str, Any], db: Session = Depends(get_db)):
     stress_level = payload.get("stress_level")
     personality_type = payload.get("personality_type")
     email = payload.get("email", "")
+    recent_task_titles = payload.get("recent_task_titles") or []
 
     if not stress_level or not personality_type:
         raise HTTPException(
@@ -260,7 +273,18 @@ def get_ai_tasks(payload: dict[str, Any], db: Session = Depends(get_db)):
         )
 
     try:
-        return _generate_tasks_via_api(stress_level, personality_type, email, db)
+        avoid_titles: list[str] | None = None
+        if isinstance(recent_task_titles, list) and recent_task_titles:
+            avoid_titles = [str(t) for t in recent_task_titles if str(t).strip()]
+        result = _generate_tasks_via_api(
+            stress_level, personality_type, email, db, avoid_task_titles=avoid_titles
+        )
+        # Best-effort: feed a client-provided "recent titles" list into the generator next time.
+        # (We don't persist tasks server-side in this demo app.)
+        if isinstance(recent_task_titles, list) and recent_task_titles:
+            # Attach to the response so frontend can keep rotating cleanly.
+            result["avoid_task_titles_echo"] = [str(t) for t in recent_task_titles if t]
+        return result
     except Exception as exc:
         raise HTTPException(
             status_code=503,

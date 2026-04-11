@@ -61,7 +61,22 @@ const CSS = `
 .badge-row{display:flex;gap:10px;flex-wrap:wrap}
 .badge{border-radius:999px;padding:10px 14px;background:#14302b;color:#eff6f4;font-size:.85rem;font-weight:700}
 .camera-note{margin-top:14px;padding:14px 16px;border-radius:20px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.08);line-height:1.65;color:rgba(239,246,244,.82)}
+.ai-studio{margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.ai-card{border-radius:32px;padding:24px;background:rgba(255,255,255,.7);border:1px solid rgba(20,48,43,.08);box-shadow:0 22px 48px rgba(20,48,43,.08)}
+.ai-card h3{font-family:'Sora',sans-serif;font-size:1.3rem;margin-bottom:8px}
+.ai-card p{line-height:1.68;color:rgba(20,48,43,.7);margin-bottom:14px}
+.lang-row,.chat-row{display:flex;gap:10px;flex-wrap:wrap}
+.lang-chip,.ai-button{border:none;border-radius:16px;padding:11px 14px;font-weight:800;cursor:pointer}
+.lang-chip{background:rgba(20,48,43,.08);color:#14302b}
+.lang-chip.active{background:#14302b;color:#fff}
+.ai-input{width:100%;border:1px solid rgba(20,48,43,.12);border-radius:16px;padding:14px 16px;font-size:1rem;margin-bottom:12px}
+.ai-output{padding:16px;border-radius:20px;background:#fff8ef;border:1px solid rgba(20,48,43,.06);line-height:1.65;color:rgba(20,48,43,.76);min-height:88px}
+.game-grid{display:grid;gap:12px}
+.game{padding:14px;border-radius:20px;background:#fff9f2;border:1px solid rgba(20,48,43,.06)}
+.game strong{display:block;margin-bottom:6px}
+.game span{display:block;line-height:1.6;color:rgba(20,48,43,.72)}
 @media (max-width:980px){.hero-grid,.grid,.score{grid-template-columns:1fr}}
+@media (max-width:860px){.ai-studio{grid-template-columns:1fr}}
 @media (max-width:620px){.mini-grid{grid-template-columns:1fr}.mission{grid-template-columns:auto 1fr}.toggle{grid-column:1 / -1}}
 `;
 
@@ -90,6 +105,38 @@ export default function Dashboard() {
   const [tasks, setTasks] = useState([]);
   const [done, setDone] = useState([]);
   const [progressState, setProgressState] = useState(() => readProgressState());
+  const [games, setGames] = useState([]);
+  const [relief, setRelief] = useState([]);
+  const [language, setLanguage] = useState("en");
+  const [chatMessage, setChatMessage] = useState("");
+  const [chatReply, setChatReply] = useState("");
+  const [translateText, setTranslateText] = useState("Take a short walk and breathe.");
+  const [translatedText, setTranslatedText] = useState("");
+  const level = result?.stress_level || "Low";
+  const pct = result?.percentage || 0;
+  const personalityType = result?.personality_type || "Balanced Individual";
+  const cameraAssisted = Boolean(result?.camera_assisted);
+  const dominantExpression = result?.dominant_expression || "steady";
+  const levelUi = LEVEL_UI[level] || LEVEL_UI.Low;
+  const completedCount = done.filter(Boolean).length;
+
+  const immediateTasks = useMemo(() => {
+    if (level !== "High") return [];
+    if (!result || (result.percentage != null && result.percentage <= 80)) return [];
+    if (!relief.length) return [];
+    return relief.map((item) => ({
+      title: item.title,
+      desc: item.action,
+      emoji: item.type === "audio" ? "🎧" : item.type === "video" ? "🎬" : "✨",
+      duration: "2-3 min",
+      category: "immediate",
+    }));
+  }, [level, relief, result]);
+
+  const displayTasks = useMemo(() => {
+    if (!immediateTasks.length) return tasks;
+    return [...immediateTasks, ...tasks];
+  }, [immediateTasks, tasks]);
 
   const fetchTasks = useCallback((level, personalityType) => {
     axios.post(`${API}/questions/ai-tasks`, {
@@ -126,8 +173,17 @@ export default function Dashboard() {
   }, [email, fetchTasks]);
 
   useEffect(() => {
-    setDone(tasks.map(() => false));
-  }, [tasks]);
+    axios.get(`${API}/flow/games`, { params: { language, mood: level } })
+      .then((res) => setGames(res.data.games || []))
+      .catch(() => setGames([]));
+    axios.get(`${API}/flow/relief`, { params: { language, level } })
+      .then((res) => setRelief(res.data.items || []))
+      .catch(() => setRelief([]));
+  }, [language, level]);
+
+  useEffect(() => {
+    setDone(displayTasks.map(() => false));
+  }, [displayTasks]);
 
   function toggleDone(index) {
     setDone((prev) => {
@@ -156,14 +212,6 @@ export default function Dashboard() {
     });
   }
 
-  const level = result?.stress_level || "Low";
-  const pct = result?.percentage || 0;
-  const personalityType = result?.personality_type || "Balanced Individual";
-  const cameraAssisted = Boolean(result?.camera_assisted);
-  const dominantExpression = result?.dominant_expression || "steady";
-  const levelUi = LEVEL_UI[level] || LEVEL_UI.Low;
-  const completedCount = done.filter(Boolean).length;
-
   const missionSummary = useMemo(() => {
     if (level === "High") return "Start with emotional safety, slower replies, and very small reconnection rituals.";
     if (level === "Medium") return "Focus on clarity, micro-recovery, and reducing misunderstanding before it grows.";
@@ -175,6 +223,19 @@ export default function Dashboard() {
     { title: "1 relationship action", text: "Complete one mission that improves emotional safety, connection, or repair." },
     { title: "1 honest check-in", text: "Tell one person how you actually feel in a simple, low-pressure way." },
   ], []);
+
+  function sendChat() {
+    if (!chatMessage.trim()) return;
+    axios.post(`${API}/flow/chat`, { message: chatMessage, language })
+      .then((res) => setChatReply(res.data.reply || ""))
+      .catch(() => setChatReply("I am here with you. Try one small reset and then answer the hardest part first."));
+  }
+
+  function translateSupport() {
+    axios.post(`${API}/flow/translate`, { text: translateText, target_language: language })
+      .then((res) => setTranslatedText(res.data.translated_text || translateText))
+      .catch(() => setTranslatedText(translateText));
+  }
 
   return (
     <>
@@ -222,7 +283,7 @@ export default function Dashboard() {
               <div className="mini-grid">
                 <div className="mini-card"><strong>{progressState.points}</strong><span>Care points earned from completing mindful relationship actions.</span></div>
                 <div className="mini-card"><strong>{progressState.streak}</strong><span>Current streak of days where you completed at least one care action.</span></div>
-                <div className="mini-card"><strong>{completedCount}/{tasks.length}</strong><span>Daily missions completed so far in this current care plan.</span></div>
+                <div className="mini-card"><strong>{completedCount}/{displayTasks.length}</strong><span>Daily missions completed so far in this current care plan.</span></div>
               </div>
             </div>
           </section>
@@ -232,7 +293,12 @@ export default function Dashboard() {
               <div className="card-title">Today&apos;s relationship support missions</div>
               <div className="card-copy">These tasks are intentionally small. The goal is to help you regulate, communicate more gently, and protect closeness while your stress is active.</div>
               <div className="missions">
-                {tasks.map((task, index) => (
+                {immediateTasks.length > 0 && (
+                  <div className="empty" style={{ background: "#fff3ea", border: "1px solid rgba(220,109,67,.25)", color: "rgba(20,48,43,.75)" }}>
+                    Your stress score is above 80. Start with one quick relief task, then continue with the regular missions.
+                  </div>
+                )}
+                {displayTasks.map((task, index) => (
                   <div key={`${task.title}-${index}`} className={`mission ${done[index] ? "done" : ""}`} onClick={() => toggleDone(index)}>
                     <div className="mission-icon">{task.emoji || "✨"}</div>
                     <div>
@@ -246,7 +312,7 @@ export default function Dashboard() {
                     <button className="toggle">{done[index] ? "Completed" : "Mark done"}</button>
                   </div>
                 ))}
-                {!tasks.length && <div className="empty">Tasks are still loading. If nothing appears after a moment, refresh missions and make sure the backend can reach the external task API.</div>}
+                {!displayTasks.length && <div className="empty">Tasks are still loading. If nothing appears after a moment, refresh missions and make sure the backend can reach the external task API.</div>}
               </div>
             </section>
 
@@ -290,6 +356,45 @@ export default function Dashboard() {
               </section>
             </div>
           </div>
+
+          <section className="ai-studio">
+            <div className="ai-card">
+              <h3>AI games for reset</h3>
+              <p>Pick one quick game to interrupt stress and refocus before you go back to work or conversation.</p>
+              <div className="game-grid">
+                {games.map((game) => (
+                  <div className="game" key={game.id}>
+                    <strong>{game.title}</strong>
+                    <span>{game.instruction}</span>
+                    <span style={{ display: "block", marginTop: 6, fontWeight: 700 }}>{game.reward}</span>
+                  </div>
+                ))}
+              </div>
+              {!games.length && <div className="empty" style={{ marginTop: 12 }}>Games are loading. The backend will generate a fresh set for your current mood.</div>}
+            </div>
+
+            <div className="ai-card">
+              <h3>AI counseling chat and language</h3>
+              <p>Use a short check-in in your preferred language and get a calm response without leaving the app.</p>
+              <div className="lang-row">
+                {["en", "hi", "bn", "ta", "te", "mr"].map((code) => (
+                  <button key={code} className={`lang-chip ${language === code ? "active" : ""}`} onClick={() => setLanguage(code)}>
+                    {code.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <input className="ai-input" value={chatMessage} onChange={(e) => setChatMessage(e.target.value)} placeholder="Tell the coach what feels heavy today..." />
+              <div className="chat-row">
+                <button className="ai-button" onClick={sendChat}>Ask coach</button>
+                <button className="ai-button" onClick={translateSupport}>Translate support text</button>
+              </div>
+              <div className="ai-output" style={{ marginTop: 12 }}>{chatReply || "Your supportive reply will appear here."}</div>
+              <input className="ai-input" style={{ marginTop: 12 }} value={translateText} onChange={(e) => setTranslateText(e.target.value)} />
+              <div className="ai-output">{translatedText || "Translated support text will appear here."}</div>
+            </div>
+          </section>
+
+          {/* Immediate relief is surfaced at the top of Today's missions when score > 80. */}
         </div>
       </div>
     </>

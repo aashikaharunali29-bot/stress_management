@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import os
 from typing import Any
 
 import requests
 from dotenv import load_dotenv
+
+from ai_client import post_gemini_json, post_openai_json
 
 load_dotenv()
 
@@ -14,157 +15,16 @@ BORED_API_RANDOM_URL = os.getenv(
     "BORED_API_RANDOM_URL", "https://bored-api.appbrewery.com/random"
 ).strip()
 
-RELATIONSHIP_TASK_LIBRARY = {
-    "social": [
-        {
-            "title": "Send a gentle check-in message",
-            "desc": "Reach out to one person you trust with a simple honest line like 'I have had a heavy day and wanted to say hi.' Small contact reduces isolation and protects relationships before stress turns into distance.",
-            "emoji": "💬",
-            "category": "social",
-        },
-        {
-            "title": "Plan one repair conversation",
-            "desc": "Choose one relationship that feels tense and decide on a calm time to talk. Planning the conversation lowers avoidance and helps you show up with more care than reactivity.",
-            "emoji": "🤝",
-            "category": "social",
-        },
-        {
-            "title": "Ask for support clearly",
-            "desc": "Tell someone exactly what would help today such as listening, a walk, or a short call. Clear requests make connection easier and reduce resentment on both sides.",
-            "emoji": "🫶",
-            "category": "social",
-        },
-    ],
-    "relaxation": [
-        {
-            "title": "Pause before replying",
-            "desc": "Take a calm-down break before answering any emotionally charged message. This creates space between stress and reaction so your relationships feel safer.",
-            "emoji": "🌿",
-            "category": "mindful",
-        },
-        {
-            "title": "Do a two-minute grounding reset",
-            "desc": "Relax your shoulders, slow your breath, and notice five things around you. Regulating your body first makes it easier to stay kind and steady with the people around you.",
-            "emoji": "🧘",
-            "category": "mindful",
-        },
-        {
-            "title": "Write the unsent version first",
-            "desc": "If you feel triggered, write your first reaction privately and do not send it. This protects the relationship while helping you understand what you actually need to say.",
-            "emoji": "✍️",
-            "category": "mindful",
-        },
-    ],
-    "education": [
-        {
-            "title": "Learn one conflict-softening phrase",
-            "desc": "Practice a line like 'Can we restart this?' or 'I want to understand before I respond.' Small communication tools can quickly lower tension in real conversations.",
-            "emoji": "📘",
-            "category": "reflection",
-        },
-        {
-            "title": "Name your stress trigger",
-            "desc": "Identify what usually makes you withdraw, snap, or over-explain in relationships. Awareness helps you interrupt the pattern before it becomes damage.",
-            "emoji": "🧠",
-            "category": "reflection",
-        },
-        {
-            "title": "Reframe one story",
-            "desc": "Notice one assumption you are making about someone today and replace it with a kinder interpretation. This supports calmer, more accurate connection.",
-            "emoji": "🔍",
-            "category": "reflection",
-        },
-    ],
-    "busywork": [
-        {
-            "title": "Clear one stress hotspot",
-            "desc": "Tidy one small area that usually raises friction at home or work. Reducing background chaos can make your interactions feel less sharp and reactive.",
-            "emoji": "🧺",
-            "category": "reset",
-        },
-        {
-            "title": "Protect one no-phone moment",
-            "desc": "Choose one meal, call, or five-minute chat today to keep phone-free. Full attention often matters more to relationships than long conversations.",
-            "emoji": "📵",
-            "category": "reset",
-        },
-        {
-            "title": "Reduce one future conflict",
-            "desc": "Handle one small unfinished task that could create tension later. Lowering hidden stress gives you more patience with people you care about.",
-            "emoji": "🗂",
-            "category": "reset",
-        },
-    ],
-    "music": [
-        {
-            "title": "Make a regulate-and-reconnect playlist",
-            "desc": "Pick a few songs that help you settle before a conversation or after conflict. Having a reset ritual makes it easier to return to relationships with warmth.",
-            "emoji": "🎵",
-            "category": "mindful",
-        },
-        {
-            "title": "Take a music-based reset walk",
-            "desc": "Use one song to breathe and walk before you revisit a stressful interaction. This can lower emotional intensity enough to respond more thoughtfully.",
-            "emoji": "🎧",
-            "category": "mindful",
-        },
-    ],
-    "charity": [
-        {
-            "title": "Offer one small act of care",
-            "desc": "Do one thoughtful thing for someone close to you without making it big or performative. Small prosocial acts can rebuild closeness when stress has made you feel distant.",
-            "emoji": "💞",
-            "category": "social",
-        },
-        {
-            "title": "Practice appreciation out loud",
-            "desc": "Tell one person something specific you value about them today. Appreciation is a strong antidote to stress-driven negativity in relationships.",
-            "emoji": "🌼",
-            "category": "social",
-        },
-    ],
-    "diy": [
-        {
-            "title": "Create a calm corner",
-            "desc": "Set up one small space where you can reset before difficult conversations. A visible calming ritual helps prevent carrying stress into relationships.",
-            "emoji": "🪴",
-            "category": "reset",
-        },
-        {
-            "title": "Build a relationship reminder card",
-            "desc": "Write down three things to remember when you are overwhelmed: breathe, ask, do not assume. Use it when tension rises so you act from intention instead of overload.",
-            "emoji": "🧩",
-            "category": "reflection",
-        },
-    ],
-    "cooking": [
-        {
-            "title": "Share a simple ritual",
-            "desc": "Invite someone to tea, fruit, or a quick snack with no heavy agenda. Low-pressure rituals create connection without demanding a big emotional talk.",
-            "emoji": "🍵",
-            "category": "social",
-        },
-        {
-            "title": "Nourish before you discuss",
-            "desc": "Eat or hydrate before a sensitive conversation if you have been running on empty. Regulation is harder when your body is depleted, and relationships feel that.",
-            "emoji": "🥣",
-            "category": "mindful",
-        },
-    ],
-    "recreational": [
-        {
-            "title": "Schedule a light moment together",
-            "desc": "Invite someone important into one low-stakes activity like a short walk, tea break, or silly video. Shared ease can reopen closeness after stressful days.",
-            "emoji": "🌤",
-            "category": "social",
-        },
-        {
-            "title": "Reconnect through play",
-            "desc": "Choose one tiny playful act today like a kind meme, inside joke, or short walk. Positive moments help relationships recover from stress accumulation.",
-            "emoji": "🎈",
-            "category": "social",
-        },
-    ],
+_ACTIVITY_EMOJI = {
+    "social": "🤝",
+    "relaxation": "🌿",
+    "education": "📚",
+    "busywork": "🧹",
+    "music": "🎵",
+    "charity": "💞",
+    "cooking": "🍲",
+    "recreational": "🌤️",
+    "diy": "🛠️",
 }
 
 RELATIONSHIP_FOCUS = {
@@ -191,39 +51,15 @@ def _fetch_external_task_api(level: str, personality_type: str) -> list[dict[str
     return data.get("tasks", data)
 
 
-def _library_for_activity(activity_type: str) -> list[dict[str, Any]]:
-    return RELATIONSHIP_TASK_LIBRARY.get(
-        activity_type,
-        RELATIONSHIP_TASK_LIBRARY["recreational"],
-    )
-
-
-def _personalize_description(
-    base_desc: str,
-    stress_level: str,
-    personality_type: str,
-    activity: dict[str, Any],
-) -> str:
-    focus = RELATIONSHIP_FOCUS.get(stress_level, RELATIONSHIP_FOCUS["Medium"])
-    participants = activity.get("participants", 1)
-    social_note = (
-        " It works well as a solo reset before you reconnect."
-        if participants == 1
-        else " It can also be shared with someone you trust."
-    )
-    return (
-        f"{base_desc} This is tailored for {focus} and a {personality_type.lower()} style."
-        f"{social_note}"
-    )
-
-
 def _estimate_duration(activity: dict[str, Any]) -> str:
     duration = activity.get("duration")
     if isinstance(duration, int):
         return f"{duration} min"
     if isinstance(duration, str) and duration.strip():
         raw = duration.strip()
-        return raw if "min" in raw or "hour" in raw or "day" in raw or "week" in raw else f"{raw} min"
+        if any(token in raw for token in ("min", "hour", "day", "week")):
+            return raw
+        return f"{raw} min"
     return "10-20 min"
 
 
@@ -232,26 +68,107 @@ def _build_task_from_activity(
     stress_level: str,
     personality_type: str,
 ) -> dict[str, Any]:
-    activity_type = activity.get("type", "recreational")
-    library = _library_for_activity(activity_type)
-    seed = f"{activity.get('key', '')}:{activity.get('activity', '')}:{personality_type}:{stress_level}"
-    template_index = int(hashlib.sha256(seed.encode("utf-8")).hexdigest(), 16) % len(library)
-    template = library[template_index]
+    activity_text = str(activity.get("activity", "")).strip()
+    activity_type = str(activity.get("type", "recreational")).strip().lower() or "recreational"
+    participants = activity.get("participants", 1)
+    focus = RELATIONSHIP_FOCUS.get(stress_level, RELATIONSHIP_FOCUS["Medium"])
+
+    social_note = (
+        "Do it solo first if you need a calm reset."
+        if participants == 1
+        else "If it fits, invite someone you trust."
+    )
+
+    title = activity_text if activity_text else "Do a small reset activity"
+    desc = (
+        f"Try: {activity_text or 'a small reset activity'}. "
+        f"This supports {focus} for a {personality_type.lower()} style. "
+        f"{social_note}"
+    )
 
     return {
-        "title": template["title"],
-        "desc": _personalize_description(
-            template["desc"], stress_level, personality_type, activity
-        ),
-        "emoji": template["emoji"],
+        "title": title[:80],
+        "desc": desc,
+        "emoji": _ACTIVITY_EMOJI.get(activity_type, "✨"),
         "duration": _estimate_duration(activity),
-        "category": template["category"],
+        "category": "social" if activity_type == "social" else "mindful",
     }
 
 
-def get_tasks(level: str, personality_type: str = "Balanced Individual") -> list[dict[str, Any]]:
+def _generate_ai_tasks(
+    level: str,
+    personality_type: str,
+    *,
+    count: int = 5,
+    avoid_titles: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    avoid_titles = [t.strip() for t in (avoid_titles or []) if isinstance(t, str) and t.strip()]
+    prompt = f"""
+Generate exactly {count} personalized micro-tasks for stress management.
+This app is relationship-focused: emotional regulation, communication, gentle reconnection.
+
+Return JSON with:
+- source: "ai_tasks"
+- tasks: array of exactly {count} objects
+
+Each task object must have:
+- title (<= 60 chars)
+- desc (<= 280 chars, practical, not clinical)
+- emoji (single emoji)
+- duration (e.g. "5 min", "15-20 min")
+- category: one of ["social","mindful","reflection","reset"]
+
+Personalization:
+- stress_level = {level}
+- personality_type = {personality_type}
+Avoid repeating these previous task titles (if any):
+{avoid_titles}
+
+Rules:
+- No medical claims. No diagnosis language.
+- Avoid repeating the same structure across tasks.
+- Make them doable today.
+"""
+
+    try:
+        data = post_openai_json(
+            messages=[
+                {"role": "system", "content": "Return JSON only. No markdown."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=900,
+            temperature=0.9,
+        )
+    except Exception:
+        data = post_gemini_json(prompt=prompt, temperature=0.9)
+
+    tasks = data.get("tasks")
+    if not isinstance(tasks, list) or len(tasks) != count:
+        raise RuntimeError("AI did not return the expected tasks payload")
+    return tasks
+
+
+def get_tasks(
+    level: str,
+    personality_type: str = "Balanced Individual",
+    context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     if TASKS_API_URL:
         return _fetch_external_task_api(level, personality_type)
+
+    # Prefer AI-generated tasks (dynamic every call). If keys are not configured
+    # or the model call fails, fall back to dynamic tasks derived from the Bored API.
+    avoid_titles: list[str] = []
+    if isinstance(context, dict):
+        raw = context.get("recent_task_titles") or context.get("avoid_task_titles") or []
+        if isinstance(raw, list):
+            avoid_titles = [str(x) for x in raw if x]
+
+    try:
+        data = _generate_ai_tasks(level, personality_type, count=5, avoid_titles=avoid_titles)
+        return data
+    except Exception:
+        pass
 
     activity_pool: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
@@ -272,8 +189,7 @@ def get_tasks(level: str, personality_type: str = "Balanced Individual") -> list
     if not activity_pool:
         raise RuntimeError("No activities returned from the external task API")
 
-    tasks = [
+    return [
         _build_task_from_activity(activity, level, personality_type)
         for activity in activity_pool[:5]
     ]
-    return tasks

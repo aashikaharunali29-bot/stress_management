@@ -1,6 +1,48 @@
 import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
+// Helper to capture a frame from a video element and return base64
+function captureFrameBase64(video) {
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg").split(",")[1]; // Remove data:image/jpeg;base64,
+}
+
+function canPour({ source, dest, capacity }) {
+  if (!source.length) return false;
+  if (dest.length >= capacity) return false;
+  if (!dest.length) return true;
+  return dest[dest.length - 1] === source[source.length - 1];
+}
+
+function pourOnce({ source, dest, capacity }) {
+  if (!canPour({ source, dest, capacity })) return { source, dest, poured: 0 };
+  const color = source[source.length - 1];
+  let poured = 0;
+  while (source.length && source[source.length - 1] === color && dest.length < capacity) {
+    dest.push(source.pop());
+    poured += 1;
+  }
+  return { source, dest, poured };
+}
+
+function isWaterSortSolved({ tubes, capacity }) {
+  if (!Array.isArray(tubes)) return false;
+  return tubes.every((tube) => {
+    if (!tube.length) return true;
+    if (tube.length !== capacity) return false;
+    return tube.every((c) => c === tube[0]);
+  });
+}
+
+function distance(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
@@ -63,6 +105,10 @@ const CSS = `
 .q-emoji{font-size:2.6rem;margin-bottom:14px}
 .q-title{font-family:'Sora',sans-serif;font-size:1.7rem;line-height:1.18;margin-bottom:12px}
 .q-copy{font-size:1rem;line-height:1.72;color:rgba(20,48,43,.72);margin-bottom:22px}
+.game-grid{display:grid;gap:12px;grid-template-columns:1fr 1fr}
+.game{border-radius:22px;padding:16px;background:#fff;border:1px solid rgba(20,48,43,.08);text-align:left;transition:.18s ease}
+.game:hover{transform:translateY(-2px);border-color:rgba(47,127,116,.4)}
+.game.selected{background:#14302b;color:#eff6f4;border-color:#14302b}
 .option-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .option{border-radius:22px;padding:16px;background:#fff;border:1px solid rgba(20,48,43,.08);cursor:pointer;transition:.18s ease;text-align:left}
 .option:hover{transform:translateY(-2px);border-color:rgba(47,127,116,.4)}
@@ -84,10 +130,18 @@ const CSS = `
 .loading h3,.error h3{font-family:'Sora',sans-serif;font-size:1.55rem;margin-bottom:10px}
 .loading p,.error p{line-height:1.7;color:rgba(20,48,43,.72)}
 @media (max-width:960px){.layout,.intro,.camera-panel{grid-template-columns:1fr}.side{position:static}}
-@media (max-width:620px){.option-grid{grid-template-columns:1fr}.scale{grid-template-columns:1fr}.main,.side{padding:18px}.q-title{font-size:1.45rem}.camera-actions{flex-direction:column}.camera-alt{margin-left:0}}
+@media (max-width:620px){.game-grid{grid-template-columns:1fr}.option-grid{grid-template-columns:1fr}.scale{grid-template-columns:1fr}.main,.side{padding:18px}.q-title{font-size:1.45rem}.camera-actions{flex-direction:column}.camera-alt{margin-left:0}}
 `;
 
 const API = "http://127.0.0.1:8000";
+const LANGUAGE_OPTIONS = [
+  { code: "en", label: "English" },
+  { code: "hi", label: "Hindi" },
+  { code: "bn", label: "Bengali" },
+  { code: "ta", label: "Tamil" },
+  { code: "te", label: "Telugu" },
+  { code: "mr", label: "Marathi" },
+];
 const STRESS_SCALE_COPY = { 1: "Rarely", 2: "Sometimes", 3: "Mixed", 4: "Often", 5: "Almost always" };
 const FACE_API_MODEL_URL = `${process.env.PUBLIC_URL || ""}/models`;
 const FACE_API_SCRIPT_URL = `${process.env.PUBLIC_URL || ""}/vendor/face-api.min.js`;
@@ -153,6 +207,7 @@ function summarizeCameraStats(stats) {
   };
 }
 
+
 export default function Questionnaire() {
   const navigate = useNavigate();
   const email = localStorage.getItem("user") || "guest@example.com";
@@ -170,6 +225,7 @@ export default function Questionnaire() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState("");
   const [sourceLabel, setSourceLabel] = useState("dynamic");
+  const [language, setLanguage] = useState(() => localStorage.getItem("app_language") || "en");
   const [idx, setIdx] = useState(0);
   const [pAns, setPAns] = useState({});
   const [sAns, setSAns] = useState({});
@@ -178,9 +234,47 @@ export default function Questionnaire() {
   const [cameraError, setCameraError] = useState("");
   const [facialSignal, setFacialSignal] = useState(EMPTY_FACIAL_SIGNAL);
   const [liveEmotion, setLiveEmotion] = useState("No face read yet");
+  const [games, setGames] = useState([]);
+  const [selectedGameId, setSelectedGameId] = useState(null);
+  const [gameAnswer, setGameAnswer] = useState(null);
+  const [gameDone, setGameDone] = useState(false);
+  const [breathLeft, setBreathLeft] = useState(0);
+  const [waterTubes, setWaterTubes] = useState(null);
+  const [waterSelected, setWaterSelected] = useState(null);
+  const [puzzlePick, setPuzzlePick] = useState(null);
+  const [spotFound, setSpotFound] = useState([]);
+  const [reliefItems, setReliefItems] = useState([]);
+  const [activeRelief, setActiveRelief] = useState(null);
+  const spotRightRef = useRef(null);
+  const [spotMiss, setSpotMiss] = useState(false);
+
+  // Periodically send frames to backend for emotion detection
+  useEffect(() => {
+    let intervalId;
+    // Only send frames if camera is active and quiz is running
+    if (cameraConsent && cameraStatus === "active" && (phase === "personality" || phase === "stress")) {
+      intervalId = setInterval(async () => {
+        if (!videoRef.current || videoRef.current.readyState < 2) return;
+        try {
+          const base64 = captureFrameBase64(videoRef.current);
+          const res = await axios.post(`${API}/emotion/detect_emotion_frame`, { image_base64: base64 });
+          if (res.data && res.data.emotion) {
+            setLiveEmotion(`Backend: ${res.data.emotion}`);
+          }
+        } catch (e) {
+          // Optionally handle error
+        }
+      }, 2000); // every 2 seconds
+    }
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraConsent, cameraStatus, phase]);
 
   useEffect(() => {
-    axios.get(`${API}/questions/assessment/${encodeURIComponent(email)}`)
+    localStorage.setItem("app_language", language);
+    axios.get(`${API}/questions/assessment/${encodeURIComponent(email)}`, { params: { language } })
       .then((res) => {
         setPQuestions(res.data.personality_questions || []);
         setSQuestions(res.data.stress_questions || []);
@@ -203,7 +297,83 @@ export default function Questionnaire() {
             setLoading(false);
           });
       });
-  }, [email]);
+  }, [email, language]);
+
+  useEffect(() => {
+    if (phase !== "games" && phase !== "stress_intro" && phase !== "stress") return;
+    const prevTypes = (() => {
+      try { return JSON.parse(localStorage.getItem("last_game_types") || "[]"); } catch { return []; }
+    })();
+    const prevType = prevTypes[prevTypes.length - 1] || "";
+    axios.get(`${API}/flow/games`, { params: { language, mood: sourceLabel || "steady", email, previous_type: prevType, previous_types: prevTypes.join(",") } })
+      .then((res) => {
+        setGames(res.data.games || []);
+        const firstId = (res.data.games || [])[0]?.id ?? null;
+        setSelectedGameId(firstId);
+        const newType = (res.data.games || [])[0]?.type;
+        if (newType) {
+          const next = [...prevTypes.filter((t) => t !== newType), newType].slice(-5);
+          localStorage.setItem("last_game_types", JSON.stringify(next));
+        }
+        setGameAnswer(null);
+        setGameDone(false);
+        setBreathLeft(0);
+        setWaterTubes(null);
+        setWaterSelected(null);
+      })
+      .catch(() => {
+        setGames([]);
+        setSelectedGameId(null);
+        setGameAnswer(null);
+        setGameDone(false);
+        setBreathLeft(0);
+        setWaterTubes(null);
+        setWaterSelected(null);
+      });
+  }, [email, language, phase, sourceLabel]);
+
+  useEffect(() => {
+    if (phase !== "games") return;
+    if (!selectedGameId) return;
+
+    const game = (games || []).find((g) => g.id === selectedGameId);
+    if (!game || game.type !== "breath") return;
+
+    const seconds = Number(game.payload?.seconds || 20);
+    setBreathLeft(seconds);
+    setGameAnswer(null);
+    setGameDone(false);
+
+    const timer = setInterval(() => {
+      setBreathLeft((value) => {
+        if (value <= 1) {
+          clearInterval(timer);
+          setGameDone(true);
+          return 0;
+        }
+        return value - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [phase, selectedGameId, games]);
+
+  useEffect(() => {
+    if (phase !== "games") return;
+    if (!selectedGameId) return;
+
+    const game = (games || []).find((g) => g.id === selectedGameId);
+    if (!game || game.type !== "water_sort") return;
+
+    const tubes = game.payload?.tubes;
+    if (!Array.isArray(tubes)) return;
+
+    setWaterTubes(tubes.map((tube) => [...tube]));
+    setWaterSelected(null);
+    setGameDone(false);
+    setPuzzlePick(null);
+    setSpotFound([]);
+  }, [phase, selectedGameId, games]);
 
   useEffect(() => () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -235,7 +405,6 @@ export default function Questionnaire() {
   const curPAns = curP ? pAns[curP.id] : null;
   const curSAns = curS ? sAns[curS.id] : null;
   const stageName = phase === "personality" ? "Pattern check" : phase === "stress" ? "Stress pulse" : phase === "loading" ? "Scoring" : "Get ready";
-
   const cameraSummaryLabel =
     facialSignal.sample_count ? `${facialSignal.dominant_expression} detected` : "No signal yet";
 
@@ -354,8 +523,14 @@ export default function Questionnaire() {
       if (idx < pQuestions.length - 1) setIdx((value) => value + 1);
       else {
         setIdx(0);
-        setPhase("stress_intro");
+        setPhase("games");
       }
+      return;
+    }
+
+    if (phase === "games") {
+      setIdx(0);
+      setPhase("stress_intro");
       return;
     }
 
@@ -388,15 +563,56 @@ export default function Questionnaire() {
       localStorage.setItem("stress_level", res.data.stress_level);
       localStorage.setItem("stress_result", JSON.stringify(res.data));
 
+      if ((res.data.percentage || 0) > 80) {
+        const prevReliefIds = (() => {
+          try { return JSON.parse(localStorage.getItem("last_relief_ids") || "[]"); } catch { return []; }
+        })();
+        const prevReliefId = prevReliefIds[prevReliefIds.length - 1] || "";
+        try {
+          const reliefRes = await axios.get(`${API}/flow/relief`, {
+            params: {
+              language,
+              level: res.data.stress_level,
+              personality_type: res.data.personality_type,
+              previous_id: prevReliefId,
+              previous_ids: prevReliefIds.join(","),
+            },
+          });
+          const items = reliefRes.data.items || [];
+          setReliefItems(items);
+          if (items[0]?.id) {
+            const newId = items[0].id;
+            const next = [...prevReliefIds.filter((t) => t !== newId), newId].slice(-8);
+            localStorage.setItem("last_relief_ids", JSON.stringify(next));
+          }
+        } catch {
+          setReliefItems([]);
+        }
+
+        setActiveRelief(null);
+        setPhase("relief");
+        return;
+      }
+
       try {
         const taskRes = await axios.post(`${API}/questions/ai-tasks`, {
           email,
           stress_level: res.data.stress_level,
           personality_type: res.data.personality_type,
+          recent_task_titles: (() => {
+            try { return JSON.parse(localStorage.getItem("recent_task_titles") || "[]"); } catch { return []; }
+          })(),
         });
         const stored = JSON.parse(localStorage.getItem("stress_result") || "{}");
         stored.ai_tasks = taskRes.data.tasks;
         localStorage.setItem("stress_result", JSON.stringify(stored));
+        try {
+          const titles = (taskRes.data.tasks || []).map((t) => t.title).filter(Boolean);
+          const prev = JSON.parse(localStorage.getItem("recent_task_titles") || "[]");
+          const next = [...prev, ...titles].slice(-25);
+          localStorage.setItem("recent_task_titles", JSON.stringify(next));
+        } catch {
+        }
       } catch {
       }
 
@@ -418,11 +634,16 @@ export default function Questionnaire() {
               <div className="brand">Mindful Bonds Check-In</div>
               <div className="subtitle">This 3-question pulse is designed to catch real-world stress before it spills into conflict, distance, shutdown, or saying things you do not mean.</div>
             </div>
-            <div className="chips">
-              <div className="chip">Source: {sourceLabel}</div>
-              <div className="chip">Stage: {stageName}</div>
-              <div className="chip">{cameraConsent ? "Camera required: connected" : "Camera required"}</div>
-            </div>
+              <div className="chips">
+                <div className="chip">Source: {sourceLabel}</div>
+                <div className="chip">Stage: {stageName}</div>
+                <div className="chip">{cameraConsent ? "Camera required: connected" : "Camera required"}</div>
+                <div className="chip">
+                  <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ border: "none", background: "transparent", color: "inherit", fontWeight: 700 }}>
+                    {LANGUAGE_OPTIONS.map((opt) => <option key={opt.code} value={opt.code}>{opt.label}</option>)}
+                  </select>
+                </div>
+              </div>
           </div>
 
           <div className="layout">
@@ -468,9 +689,8 @@ export default function Questionnaire() {
                 <div className="intro">
                   <section className="hero">
                     <div className="kicker">Relationship-aware assessment</div>
-                    <h2>Understand your stress before it changes how you show up with others.</h2>
-                    <p>In just 3 questions, you will map your style, check your current overload level, and unlock a personalized set of mindful missions designed for communication, repair, and emotional safety.</p>
-
+                    <h2>{language === "hi" ? "Stress ko pehle samjho." : language === "ta" ? "Stress-ai munnadi purindhukollungal." : "Understand your stress before it changes how you show up with others."}</h2>
+                    <p>{language === "en" ? "In just 3 questions, you will map your style, check your current overload level, and unlock a personalized set of mindful missions designed for communication, repair, and emotional safety." : "You can continue in your chosen language."}</p>
                     <div className="camera-consent">
                       <strong>Mandatory camera-assisted check-in</strong>
                       <p>This assessment uses both your answers and live facial-expression signals to reduce false assumptions. Raw video stays in your browser. Only a small summary signal is sent to the backend.</p>
@@ -518,6 +738,430 @@ export default function Questionnaire() {
                       <li>Feeling distant even when you care deeply</li>
                     </ul>
                   </aside>
+                </div>
+              )}
+
+              {phase === "games" && (
+                <div className="question-card">
+                  <div className="kicker">AI games • 1 quick reset</div>
+                  <div className="q-title">{language === "en" ? "Take a 2-minute reset before stress questions." : "Stress questions se pehle ek chhota reset lein."}</div>
+                  <div className="q-copy">{language === "en" ? "Choose one quick game. It helps interrupt stress and gives your nervous system a softer start before the final questions." : "Apni choice ki ek game khelें aur phir continue karein."}</div>
+                  <div className="game-grid">
+                    {(games || []).map((game) => (
+                      <button
+                        type="button"
+                        key={game.id}
+                        className={`game ${selectedGameId === game.id ? "selected" : ""}`}
+                        onClick={() => {
+                          setSelectedGameId(game.id);
+                          setGameAnswer(null);
+                          setGameDone(false);
+                          setBreathLeft(0);
+                        }}
+                        style={{ textAlign: "left", cursor: "pointer", border: "none" }}
+                      >
+                        <strong>{game.title}</strong>
+                        <span>{game.instruction}</span>
+                        <span style={{ display: "block", marginTop: 6, fontWeight: 700 }}>{game.reward}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {(() => {
+                    const game = (games || []).find((g) => g.id === selectedGameId);
+                    if (!game) return null;
+
+                    const payload = game.payload || {};
+                    const showExplain = gameDone && payload.explain;
+
+                    if (game.type === "odd_one_out" && Array.isArray(payload.items)) {
+                      return (
+                        <div style={{ marginTop: 16, padding: 16, borderRadius: 18, background: "rgba(20,48,43,.04)", border: "1px solid rgba(20,48,43,.08)" }}>
+                          <div style={{ fontWeight: 900, marginBottom: 10 }}>Odd one out</div>
+                          <div className="option-grid">
+                            {payload.items.map((item, index) => (
+                              <button
+                                key={`${item}-${index}`}
+                                className={`option ${gameAnswer === index ? "selected" : ""}`}
+                                onClick={() => {
+                                  setGameAnswer(index);
+                                  if (index === payload.correctIndex) setGameDone(true);
+                                }}
+                              >
+                                <span className="option-emoji">{item}</span>
+                                <span className="option-label">{language === "en" ? "Choose" : "Select"}</span>
+                              </button>
+                            ))}
+                          </div>
+                          {gameAnswer != null && !gameDone && (
+                            <div style={{ marginTop: 10, fontWeight: 800, color: "#bc4f31" }}>Try again â€” youâ€™ve got this.</div>
+                          )}
+                          {showExplain && (
+                            <div style={{ marginTop: 10, fontWeight: 800, color: "rgba(20,48,43,.8)" }}>{payload.explain}</div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    if (game.type === "spot_errors" && Array.isArray(payload.choices) && payload.prompt) {
+                      return (
+                        <div style={{ marginTop: 16, padding: 16, borderRadius: 18, background: "rgba(20,48,43,.04)", border: "1px solid rgba(20,48,43,.08)" }}>
+                          <div style={{ fontWeight: 900, marginBottom: 10 }}>Spot the wrong word</div>
+                          <div style={{ marginBottom: 10, lineHeight: 1.6 }}>{payload.prompt}</div>
+                          <div className="option-grid">
+                            {payload.choices.map((choice, index) => (
+                              <button
+                                key={`${choice}-${index}`}
+                                className={`option ${gameAnswer === index ? "selected" : ""}`}
+                                onClick={() => {
+                                  setGameAnswer(index);
+                                  if (index === payload.correctIndex) setGameDone(true);
+                                }}
+                              >
+                                <span className="option-emoji">ðŸ”Ž</span>
+                                <span className="option-label">{choice}</span>
+                              </button>
+                            ))}
+                          </div>
+                          {gameAnswer != null && !gameDone && (
+                            <div style={{ marginTop: 10, fontWeight: 800, color: "#bc4f31" }}>Not that one â€” try again.</div>
+                          )}
+                          {showExplain && (
+                            <div style={{ marginTop: 10, fontWeight: 800, color: "rgba(20,48,43,.8)" }}>{payload.explain}</div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    if (game.type === "puzzle" && Array.isArray(payload.sequence) && Array.isArray(payload.options)) {
+                      const seq = payload.sequence || [];
+                      const blankIndex = seq.indexOf("?");
+                      const answer = payload.answer;
+                      const solved = gameDone || (gameAnswer != null && String(gameAnswer) === String(answer));
+                      const canDrop = puzzlePick != null && blankIndex >= 0;
+                      return (
+                        <div style={{ marginTop: 16, padding: 16, borderRadius: 18, background: "rgba(20,48,43,.04)", border: "1px solid rgba(20,48,43,.08)" }}>
+                          <div style={{ fontWeight: 900, marginBottom: 10 }}>Finish the pattern</div>
+
+                          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+                            {seq.map((token, index) => {
+                              const isBlank = token === "?";
+                              return (
+                                <button
+                                  key={`${token}-${index}`}
+                                  type="button"
+                                  onClick={() => {
+                                    if (!isBlank || puzzlePick == null || solved) return;
+                                    setGameAnswer(puzzlePick);
+                                    if (String(puzzlePick) === String(answer)) setGameDone(true);
+                                    else setGameDone(false);
+                                  }}
+                                  onDragOver={(e) => {
+                                    if (!isBlank || !canDrop || solved) return;
+                                    e.preventDefault();
+                                  }}
+                                  onDrop={(e) => {
+                                    if (!isBlank || solved) return;
+                                    e.preventDefault();
+                                    const dropped = e.dataTransfer.getData("text/plain");
+                                    if (!dropped) return;
+                                    setGameAnswer(dropped);
+                                    setPuzzlePick(null);
+                                    if (String(dropped) === String(answer)) setGameDone(true);
+                                  }}
+                                  className={`option ${isBlank ? "selected" : ""}`}
+                                  style={{
+                                    padding: "12px 14px",
+                                    borderRadius: 16,
+                                    minWidth: 58,
+                                    textAlign: "center",
+                                    cursor: isBlank ? "pointer" : "default",
+                                    background: isBlank ? "rgba(47,127,116,.12)" : "#fff",
+                                    border: isBlank ? "2px dashed rgba(47,127,116,.55)" : "1px solid rgba(20,48,43,.08)",
+                                    color: "#14302b",
+                                    fontWeight: 900,
+                                  }}
+                                >
+                                  {isBlank ? (gameAnswer != null ? gameAnswer : "Drop") : token}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          <div style={{ fontWeight: 800, color: "rgba(20,48,43,.72)", marginBottom: 10 }}>
+                            Tap an option (or drag it) then tap the “Drop” box.
+                          </div>
+
+                          <div className="option-grid">
+                            {(payload.options || []).map((opt) => (
+                              <button
+                                key={opt}
+                                draggable
+                                onDragStart={(e) => {
+                                  e.dataTransfer.setData("text/plain", String(opt));
+                                  setPuzzlePick(String(opt));
+                                }}
+                                className={`option ${String(puzzlePick) === String(opt) ? "selected" : ""}`}
+                                onClick={() => setPuzzlePick(String(opt))}
+                              >
+                                <span className="option-emoji">🔷</span>
+                                <span className="option-label">{opt}</span>
+                              </button>
+                            ))}
+                          </div>
+
+                          {gameAnswer != null && !gameDone && (
+                            <div style={{ marginTop: 10, fontWeight: 800, color: "#bc4f31" }}>Not quite — try a different piece.</div>
+                          )}
+                          {gameDone && payload.explain && (
+                            <div style={{ marginTop: 10, fontWeight: 800, color: "rgba(20,48,43,.8)" }}>{payload.explain}</div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    if (game.type === "breath") {
+                      return (
+                        <div style={{ marginTop: 16, padding: 16, borderRadius: 18, background: "rgba(20,48,43,.04)", border: "1px solid rgba(20,48,43,.08)" }}>
+                          <div style={{ fontWeight: 900, marginBottom: 10 }}>Breathing mini-reset</div>
+                          <div style={{ marginBottom: 10, lineHeight: 1.6 }}>
+                            Pattern: <strong>{payload.pattern || "4-in / 6-out"}</strong>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                            <div style={{ fontWeight: 900 }}>{breathLeft > 0 ? `Time left: ${breathLeft}s` : gameDone ? "Done â€” nice reset." : "Tap this game to start."}</div>
+                            {gameDone ? <div style={{ fontWeight: 900, color: "#2f7f74" }}>Completed</div> : <div />}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    if (game.type === "water_sort") {
+                      const capacity = Number(payload.capacity || 4);
+                      const palette = payload.palette || {};
+                      const tubes = waterTubes || payload.tubes || [];
+                      const solved = isWaterSortSolved({ tubes, capacity });
+                      if (solved && !gameDone) setTimeout(() => setGameDone(true), 0);
+
+                      return (
+                        <div style={{ marginTop: 16, padding: 16, borderRadius: 18, background: "rgba(20,48,43,.04)", border: "1px solid rgba(20,48,43,.08)" }}>
+                          <div style={{ fontWeight: 900, marginBottom: 6 }}>Water sort</div>
+                          <div style={{ marginBottom: 12, lineHeight: 1.6, color: "rgba(20,48,43,.75)" }}>
+                            {payload.goal || "Make each non-empty tube a single color."}
+                          </div>
+
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+                            {(tubes || []).slice(0, 3).map((tube, tubeIndex) => {
+                              const isSelected = waterSelected === tubeIndex;
+                              return (
+                                <button
+                                  key={`tube-${tubeIndex}`}
+                                  type="button"
+                                  onClick={() => {
+                                    if (gameDone) return;
+                                    if (!Array.isArray(tubes)) return;
+
+                                    if (waterSelected == null) {
+                                      setWaterSelected(tubeIndex);
+                                      return;
+                                    }
+
+                                    const nextTubes = tubes.map((t) => [...t]);
+                                    const sourceIndex = waterSelected;
+                                    const destIndex = tubeIndex;
+                                    const source = [...nextTubes[sourceIndex]];
+                                    const dest = [...nextTubes[destIndex]];
+
+                                    const res = pourOnce({ source, dest, capacity });
+                                    if (res.poured > 0) {
+                                      nextTubes[sourceIndex] = res.source;
+                                      nextTubes[destIndex] = res.dest;
+                                      setWaterTubes(nextTubes);
+                                    }
+                                    setWaterSelected(null);
+                                  }}
+                                  style={{
+                                    border: isSelected ? "2px solid #2f7f74" : "1px solid rgba(20,48,43,.12)",
+                                    background: "#fff",
+                                    borderRadius: 18,
+                                    padding: 12,
+                                    cursor: "pointer",
+                                    display: "grid",
+                                    gap: 8,
+                                  }}
+                                >
+                                  <div style={{ display: "grid", gridTemplateRows: `repeat(${capacity}, 1fr)`, gap: 6, minHeight: 160 }}>
+                                    {Array.from({ length: capacity }).map((_, slotIndex) => {
+                                      const colorKey = tube[slotIndex] || null;
+                                      const background = colorKey ? (palette[colorKey] || "#cbd5e1") : "rgba(20,48,43,.06)";
+                                      return (
+                                        <div
+                                          key={`slot-${slotIndex}`}
+                                          style={{
+                                            height: 24,
+                                            borderRadius: 10,
+                                            background,
+                                            border: "1px solid rgba(20,48,43,.08)",
+                                          }}
+                                        />
+                                      );
+                                    })}
+                                  </div>
+                                  <div style={{ fontWeight: 900, color: isSelected ? "#2f7f74" : "rgba(20,48,43,.7)" }}>
+                                    {isSelected ? "Selected" : "Tap"}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                            <div style={{ fontWeight: 900, color: solved ? "#2f7f74" : "rgba(20,48,43,.7)" }}>
+                              {solved ? "Completed — nice focus reset." : "Tip: pour onto same color or empty tube."}
+                            </div>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => {
+                                setWaterTubes((payload.tubes || []).map((t) => [...t]));
+                                setWaterSelected(null);
+                                setGameDone(false);
+                              }}
+                            >
+                              Restart
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    if (game.type === "spot_difference") {
+                      const left = payload.left_svg || "";
+                      const right = payload.right_svg || "";
+                      const viewBox = payload.viewBox || { w: 120, h: 120 };
+                      const diffs = Array.isArray(payload.diffs) ? payload.diffs : [];
+                      const goalCount = Number(payload.goal_count || 3);
+                      const found = spotFound || [];
+                      const solved = found.length >= goalCount;
+                      if (solved && !gameDone) setTimeout(() => setGameDone(true), 0);
+                      return (
+                        <div style={{ marginTop: 16, padding: 16, borderRadius: 18, background: "rgba(20,48,43,.04)", border: "1px solid rgba(20,48,43,.08)" }}>
+                          <div style={{ fontWeight: 900, marginBottom: 6 }}>Spot the difference</div>
+                          <div style={{ marginBottom: 12, lineHeight: 1.6, color: "rgba(20,48,43,.75)" }}>
+                            Click the right image to find {goalCount} differences. Found: {found.length}/{goalCount}
+                          </div>
+
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "start" }}>
+                            <div style={{ background: "#fff", borderRadius: 18, border: "1px solid rgba(20,48,43,.12)", padding: 12 }}>
+                              <div style={{ fontWeight: 900, marginBottom: 8 }}>Image A</div>
+                              <div style={{ display: "grid", placeItems: "center" }} dangerouslySetInnerHTML={{ __html: left }} />
+                            </div>
+                            <div style={{ background: "#fff", borderRadius: 18, border: "1px solid rgba(20,48,43,.12)", padding: 12 }}>
+                              <div style={{ fontWeight: 900, marginBottom: 8 }}>Image B</div>
+                              <div
+                                ref={spotRightRef}
+                                style={{ position: "relative", display: "grid", placeItems: "center" }}
+                              >
+                                <div style={{ display: "grid", placeItems: "center" }} dangerouslySetInnerHTML={{ __html: right }} />
+                                <div
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={(e) => {
+                                    if (gameDone) return;
+                                    const rect = spotRightRef.current?.getBoundingClientRect?.() || e.currentTarget.getBoundingClientRect();
+                                    const x = ((e.clientX - rect.left) / rect.width) * Number(viewBox.w || 120);
+                                    const y = ((e.clientY - rect.top) / rect.height) * Number(viewBox.h || 120);
+
+                                    let matchedIndex = -1;
+                                    for (let i = 0; i < diffs.length; i++) {
+                                      const d = diffs[i];
+                                      if (found.includes(i)) continue;
+                                      const r = Number(d.r || 12);
+                                      if (distance({ x, y }, { x: Number(d.x), y: Number(d.y) }) <= r) {
+                                        matchedIndex = i;
+                                        break;
+                                      }
+                                    }
+
+                                    if (matchedIndex >= 0) {
+                                      setSpotFound((prev) => [...prev, matchedIndex]);
+                                      setSpotMiss(false);
+                                    } else {
+                                      setSpotMiss(true);
+                                      window.setTimeout(() => setSpotMiss(false), 800);
+                                    }
+                                  }}
+                                  onKeyDown={() => {}}
+                                  style={{
+                                    position: "absolute",
+                                    inset: 0,
+                                    cursor: "crosshair",
+                                    borderRadius: 16,
+                                    outline: spotMiss ? "3px solid rgba(220,109,67,.55)" : "3px solid transparent",
+                                  }}
+                                />
+                                {diffs.map((d, index) => {
+                                  if (!found.includes(index)) return null;
+                                  const leftPct = (Number(d.x) / Number(viewBox.w || 120)) * 100;
+                                  const topPct = (Number(d.y) / Number(viewBox.h || 120)) * 100;
+                                  const size = (Number(d.r || 12) / Number(viewBox.w || 120)) * 100 * 2;
+                                  return (
+                                    <div
+                                      key={`mark-${index}`}
+                                      style={{
+                                        position: "absolute",
+                                        left: `${clamp(leftPct, 0, 100)}%`,
+                                        top: `${clamp(topPct, 0, 100)}%`,
+                                        width: `${size}%`,
+                                        height: `${size}%`,
+                                        transform: "translate(-50%,-50%)",
+                                        borderRadius: 999,
+                                        border: "3px solid rgba(220,109,67,.9)",
+                                        boxShadow: "0 8px 18px rgba(220,109,67,.18)",
+                                        pointerEvents: "none",
+                                      }}
+                                    />
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                          {spotMiss && !solved && (
+                            <div style={{ marginTop: 10, fontWeight: 800, color: "#bc4f31" }}>
+                              Not there — keep scanning.
+                            </div>
+                          )}
+
+                          <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                            <div style={{ fontWeight: 900, color: solved ? "#2f7f74" : "rgba(20,48,43,.7)" }}>
+                              {solved ? "Completed — nice visual reset." : "Tip: scan corners, then the center."}
+                            </div>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => {
+                                setSpotFound([]);
+                                setGameDone(false);
+                                setSpotMiss(false);
+                              }}
+                            >
+                              Restart
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div style={{ marginTop: 16, padding: 16, borderRadius: 18, background: "rgba(20,48,43,.04)", border: "1px solid rgba(20,48,43,.08)" }}>
+                        <div style={{ fontWeight: 900, marginBottom: 10 }}>Quick reset</div>
+                        <div style={{ lineHeight: 1.6 }}>{game.instruction}</div>
+                      </div>
+                    );
+                  })()}
+                  <div className="nav-row">
+                    <button className="ghost" onClick={() => setPhase("personality")}>Back</button>
+                    <button className="primary" disabled={!gameDone} onClick={goNext}>Continue to stress questions</button>
+                  </div>
                 </div>
               )}
 
@@ -585,6 +1229,8 @@ export default function Questionnaire() {
                 </div>
               )}
 
+              {/* Immediate relief is handled as a dedicated `relief` phase after scoring. */}
+
               {phase === "stress" && curS && (
                 <div className="question-card">
                   <div className="kicker">Stress pulse • {idx + 1} of {sQuestions.length}</div>
@@ -607,6 +1253,71 @@ export default function Questionnaire() {
               )}
 
               {phase === "loading" && <div className="loading"><h3>Building your care plan</h3><p>Scoring your stress level, identifying your pattern, and selecting mindful tasks that support calmer relationships.</p></div>}
+
+              {phase === "relief" && (
+                <div className="question-card">
+                  <div className="kicker">Immediate relief</div>
+                  <div className="q-title">Your stress is high. Let&apos;s lower it first.</div>
+                  <div className="q-copy">Play one short clip (about 1–4 minutes) inside the app, then continue to your care plan.</div>
+
+                  <div className="game-grid" style={{ gridTemplateColumns: "1fr" }}>
+                    {(reliefItems || []).map((item) => (
+                      <button
+                        type="button"
+                        key={item.id || item.title}
+                        className="game"
+                        onClick={() => setActiveRelief(item)}
+                        style={{ textAlign: "left", cursor: "pointer", border: "none" }}
+                      >
+                        <strong>{item.title}</strong>
+                        <span>{item.why || "Quick calming content picked for your pattern."}</span>
+                        <span style={{ display: "block", marginTop: 6, fontWeight: 700 }}>
+                          {item.duration_sec ? `${Math.max(1, Math.round(item.duration_sec / 60))} min` : "short clip"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {!reliefItems?.length && (
+                    <div className="empty" style={{ marginTop: 12 }}>
+                      Relief is loading. If it doesn&apos;t appear, continue to your care plan and try again later.
+                    </div>
+                  )}
+
+                  <div className="nav-row">
+                    <div />
+                    <button
+                      className="primary"
+                      onClick={() => {
+                        stopCameraAssist(false);
+                        navigate("/dashboard");
+                      }}
+                    >
+                      Continue to care plan
+                    </button>
+                  </div>
+
+                  {activeRelief && (
+                    <div style={{ marginTop: 16, borderRadius: 24, overflow: "hidden", border: "1px solid rgba(20,48,43,.12)", background: "#0f211d" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: 12, background: "rgba(255,255,255,.06)" }}>
+                        <div style={{ fontWeight: 900, color: "#eff6f4" }}>{activeRelief.title}</div>
+                        <button className="ghost" onClick={() => setActiveRelief(null)} style={{ background: "rgba(255,255,255,.12)", color: "#eff6f4" }}>
+                          Close
+                        </button>
+                      </div>
+                      <div style={{ position: "relative", paddingTop: "56.25%" }}>
+                        <iframe
+                          title={activeRelief.title}
+                          src={activeRelief.embed_url}
+                          allow="autoplay; encrypted-media; picture-in-picture"
+                          allowFullScreen
+                          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0 }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {phase === "error" && (
                 <div className="error">
